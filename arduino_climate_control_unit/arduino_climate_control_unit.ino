@@ -61,9 +61,7 @@ const static unsigned char PROGMEM logoBmp[] =
 };
 
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("initialize");
+void setup() {  
   initialize();
   displayModuleSatuses();
 }
@@ -117,8 +115,7 @@ void initBmp() {
 }
 void initEsp() {
   espSerial.begin(115200); //default baud rate for current firmware
-  delay(500);
-  Serial.println("change baud rate");
+  delay(500);  
   espSerial.println("AT+UART_CUR=9600,8,1,0,0"); //software serial does not work on baud >38400 stable. Setting Esp baud to 9600 for correct work
   delay(500);
   espSerial.begin(9600);
@@ -248,20 +245,17 @@ bool getReleyState() {
 bool getEspState () {
   byte attemptsCounter = 0;
   byte maxAttemptsBeforeResetEsp = 2;
-  Serial.println("start getesp state");
+  
   if (!espSerial) {
-    _isEspOk = false;
-    Serial.println("esp serial is false");
+    _isEspOk = false;    
   }
   else {
     while (attemptsCounter < maxAttemptsBeforeResetEsp) {
-      attemptsCounter++;
-      Serial.println("sending at");
+      attemptsCounter++;      
       espSerial.println("AT");
       delay(500);
       if (espSerial.available()) {
-        if (espSerial.find("OK")) {
-          Serial.println("OK received");
+        if (espSerial.find("OK")) {          
           _isEspOk = true;
           break;
         }
