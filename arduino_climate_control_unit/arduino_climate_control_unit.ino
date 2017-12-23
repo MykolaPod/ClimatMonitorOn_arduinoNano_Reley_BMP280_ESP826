@@ -4,16 +4,22 @@
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
-//#include <SoftwareSerial.h>
-//SoftwareSerial espSerial(10, 11); // RX, TX
+#include <SoftwareSerial.h>
+
+#define RelayPin 8
+#define ErrorCodeForSensorsData -500
+#define EspRxPinOnArduino 11
+#define EspTxPinOnArduino 10
+
+SoftwareSerial espSerial(EspRxPinOnArduino, EspTxPinOnArduino); // RX, TX
 
 Adafruit_BMP280 bmp; // I2C // pin 3 - Serial clock out (SCLK) // pin 4 - Serial data out (DIN)// pin 5 - Data/Command select (D/C)// pin 6 - LCD chip select (CS)// pin 7 - LCD reset (RST)
 Adafruit_PCD8544 display = Adafruit_PCD8544(3, 4, 5, 6, 7);
-#define RelayPin 8
-#define ErrorCodeForSensorsData -500
+
 
 bool _releyState = false; //false OFF, true ON
 bool _isBmpOk = false;
+bool _isEspOk = false;
 bool _isInitialized = false;
 float _bmpPreasure = ErrorCodeForSensorsData;
 float _bmpTemp = ErrorCodeForSensorsData;
@@ -57,23 +63,36 @@ const static unsigned char PROGMEM logoBmp[] =
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("initializing");
+  Serial.println("initialize");
   initialize();
-  
   displayModuleSatuses();
 }
 
 void loop() {
+  if (espSerial.available() > 0) {
+    espSerial.read();
+  }
+
   _bmpTemp = getBmpTemp();
   _bmpPreasure = getBmpPreasure();
   _releyState = getReleyState();
 
-  modeController();  
+  modeController();
   displayParameters(_bmpTemp, _bmpPreasure, _releyState);
   delay(2000);
 }
 
 void initialize () {
+  initDisplay();
+  initRelay();
+  initBmp();
+  initEsp();
+
+  delay(1000);
+  _isInitialized = true;
+}
+
+void initDisplay() {
   display.begin();              // Инициализация дисплея
   display.setContrast(20);      // Устанавливаем контраст
   display.clearDisplay();
@@ -88,13 +107,29 @@ void initialize () {
   display.setCursor(15, 40);
   display.print("solutions");
   display.display();
-
+}
+void initRelay() {
   pinMode(RelayPin, OUTPUT);
   turnReleyOff();
+}
+void initBmp() {
   _isBmpOk = bmp.begin();
-
-  delay(1000);
-  _isInitialized = true;
+}
+void initEsp() {
+  espSerial.begin(115200); //default baud rate for current firmware
+  delay(500);
+  Serial.println("change baud rate");
+  espSerial.println("AT+UART_CUR=9600,8,1,0,0"); //software serial does not work on baud >38400 stable. Setting Esp baud to 9600 for correct work
+  delay(500);
+  espSerial.begin(9600);
+  delay(500);
+  bool isEspOk = getEspState();
+  if(isEspOk){
+    
+  }
+  else {
+    
+  }
 }
 
 void displayModuleSatuses() {
@@ -102,6 +137,7 @@ void displayModuleSatuses() {
   display.display();
   display.setTextSize(1);
   display.setCursor(0, 0);
+  
   display.print("BMP280: ");
   if (!bmp.begin()) {
     display.println("FAIL");
@@ -109,18 +145,24 @@ void displayModuleSatuses() {
   else {
     display.println("OK");
   }
-  displayMode(getReleyState());
-  display.display();
-  delay(1000);
-}
-
-void displayMode(bool releyMode) {
+  
   display.print("Mode: ");
-  if (releyMode) {
+  if (getReleyState()) {
     display.println("ON");
   } else {
     display.println("OFF");
+  }  
+
+  display.print("WIFI: ");
+  if (!getEspState()) {
+    display.println("FAIL");
   }
+  else {
+    display.println("OK");
+  }
+  
+  display.display();
+  delay(1000);
 }
 
 void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
@@ -147,33 +189,38 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
     display.println(" %");
     display.drawLine(0, 34, display.width(), 34, BLACK);
     display.setCursor(0, 36);
-    displayMode(releyState);
+    display.print("Mode: ");
+    if (getReleyState()) {
+      display.println("ON");
+    } else {
+      display.println("OFF");
+    }
     display.display();
   }
 }
 
-void modeController(){
-  if(_bmpTemp == ErrorCodeForSensorsData) {
+void modeController() {
+  if (_bmpTemp == ErrorCodeForSensorsData) {
     return;
   }
 
-  if(_bmpTemp > 30.00){
+  if (_bmpTemp > 28.00) {
     turnReleyOn();
   }
-  if(_bmpTemp < 27.00){
+  if (_bmpTemp < 27.00) {
     turnReleyOff();
   }
-  
+
 }
 
 void turnReleyOn () {
   digitalWrite(RelayPin, LOW);
-  _releyState = true;  
+  _releyState = true;
 }
 
 void turnReleyOff () {
   digitalWrite(RelayPin, HIGH);
-  _releyState = false;  
+  _releyState = false;
 }
 
 float getBmpTemp() {
@@ -187,14 +234,41 @@ float getBmpTemp() {
 
 float getBmpPreasure() {
   if (_isBmpOk) {
-    return (bmp.readPressure() / 101325)*1000;
+    return (bmp.readPressure() / 101325) * 1000;
   }
   else {
     return ErrorCodeForSensorsData;
   }
 }
 
-bool getReleyState(){
+bool getReleyState() {
   return _releyState;
+}
+
+bool getEspState () {
+  byte attemptsCounter = 0;
+  byte maxAttemptsBeforeResetEsp = 2;
+  Serial.println("start getesp state");
+  if (!espSerial) {
+    _isEspOk = false;
+    Serial.println("esp serial is false");
+  }
+  else {
+    while (attemptsCounter < maxAttemptsBeforeResetEsp) {
+      attemptsCounter++;
+      Serial.println("sending at");
+      espSerial.println("AT");
+      delay(500);
+      if (espSerial.available()) {
+        if (espSerial.find("OK")) {
+          Serial.println("OK received");
+          _isEspOk = true;
+          break;
+        }
+      }
+      _isEspOk = false;
+    }
+  }
+  return _isEspOk;
 }
 
