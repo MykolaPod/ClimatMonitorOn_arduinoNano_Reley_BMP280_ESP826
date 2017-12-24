@@ -6,6 +6,11 @@
 #include <Adafruit_BMP280.h>
 #include <SoftwareSerial.h>
 
+
+#define FailString "FAIL"
+#define OkString "OK"
+#define OnString "ON"
+#define OffString "OFF"
 #define RelayPin 8
 #define ErrorCodeForSensorsData -500
 #define EspRxPinOnArduino 11
@@ -16,13 +21,17 @@ SoftwareSerial espSerial(EspRxPinOnArduino, EspTxPinOnArduino); // RX, TX
 Adafruit_BMP280 bmp; // I2C // pin 3 - Serial clock out (SCLK) // pin 4 - Serial data out (DIN)// pin 5 - Data/Command select (D/C)// pin 6 - LCD chip select (CS)// pin 7 - LCD reset (RST)
 Adafruit_PCD8544 display = Adafruit_PCD8544(3, 4, 5, 6, 7);
 
-
 bool _releyState = false; //false OFF, true ON
 bool _isBmpOk = false;
 bool _isEspOk = false;
+bool _isWiFiOk = false;
 bool _isInitialized = false;
+String _ipAddress = "N/A";
 float _bmpPreasure = ErrorCodeForSensorsData;
 float _bmpTemp = ErrorCodeForSensorsData;
+
+bool _isLastSendDataFailed = true;
+
 
 const static unsigned char PROGMEM logoBmp[] =
 {
@@ -61,7 +70,8 @@ const static unsigned char PROGMEM logoBmp[] =
 };
 
 
-void setup() {  
+void setup() {
+  Serial.begin(115200);
   initialize();
   displayModuleSatuses();
 }
@@ -114,19 +124,16 @@ void initBmp() {
   _isBmpOk = bmp.begin();
 }
 void initEsp() {
-  espSerial.begin(115200); //default baud rate for current firmware
-  delay(500);  
-  espSerial.println("AT+UART_CUR=9600,8,1,0,0"); //software serial does not work on baud >38400 stable. Setting Esp baud to 9600 for correct work
+  espSerial.begin(9600); //default baud rate for current firmware
   delay(500);
-  espSerial.begin(9600);
-  delay(500);
-  bool isEspOk = getEspState();
-  if(isEspOk){
-    
+  _isEspOk = getEspState();
+  if (_isEspOk) {
+    _isWiFiOk = getWiFiStatus();
+    if (_isWiFiOk) {
+      _ipAddress = getIP();
+    }
   }
-  else {
-    
-  }
+
 }
 
 void displayModuleSatuses() {
@@ -134,32 +141,35 @@ void displayModuleSatuses() {
   display.display();
   display.setTextSize(1);
   display.setCursor(0, 0);
-  
+
   display.print("BMP280: ");
   if (!bmp.begin()) {
-    display.println("FAIL");
+    display.println(FailString);
   }
   else {
-    display.println("OK");
+    display.println(OkString);
   }
-  
+
   display.print("Mode: ");
   if (getReleyState()) {
-    display.println("ON");
+    display.println(OnString);
   } else {
-    display.println("OFF");
-  }  
+    display.println(OffString);
+  }
 
-  display.print("WIFI: ");
-  if (!getEspState()) {
-    display.println("FAIL");
+  display.println("WIFI: ");
+
+  if (!_isEspOk) {
+    display.println(FailString);
   }
   else {
-    display.println("OK");
+
+    display.println(_ipAddress);
+
   }
-  
+
   display.display();
-  delay(1000);
+  delay(10000);
 }
 
 void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
@@ -188,9 +198,9 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
     display.setCursor(0, 36);
     display.print("Mode: ");
     if (getReleyState()) {
-      display.println("ON");
+      display.println(OnString);
     } else {
-      display.println("OFF");
+      display.println(OffString);
     }
     display.display();
   }
@@ -244,18 +254,20 @@ bool getReleyState() {
 
 bool getEspState () {
   byte attemptsCounter = 0;
-  byte maxAttemptsBeforeResetEsp = 2;
-  
+
   if (!espSerial) {
-    _isEspOk = false;    
+    _isEspOk = false;
+    return _isEspOk;
   }
   else {
-    while (attemptsCounter < maxAttemptsBeforeResetEsp) {
-      attemptsCounter++;      
-      espSerial.println("AT");
-      delay(500);
+    while (attemptsCounter < 2) {
+      attemptsCounter++;
+      Serial.println("check if ESP up");
+      espSerial.println("AT"); //this is not an AT command. ESP has custom firmware
+      delay(1000);
       if (espSerial.available()) {
-        if (espSerial.find("OK")) {          
+        if (espSerial.find(OkString)) {
+          Serial.println(">Esp OK");
           _isEspOk = true;
           break;
         }
@@ -265,4 +277,58 @@ bool getEspState () {
   }
   return _isEspOk;
 }
+
+bool getWiFiStatus() {
+  byte attemptsCounter = 0;
+  if (!espSerial) {
+    _isEspOk = false;
+    return _isEspOk;
+  }
+  else {
+    Serial.println("getting wifi status");
+    while (attemptsCounter < 2) {
+      attemptsCounter++;
+      Serial.println("send WIFISTATUS");
+      espSerial.println("WIFISTATUS");
+      delay(1000);
+      if (espSerial.available()) {
+        if (espSerial.find("3")) {
+          Serial.println(">WIFI OK");
+          return true;
+        }
+        else {
+          return false;
+        }
+      }
+    }
+  }
+}
+String getIP() {
+  byte attemptsCounter = 0;
+  _ipAddress = "N/A";
+  if (!espSerial) {
+    _isEspOk = false;
+    return _ipAddress;
+  }
+  else {
+    Serial.println("getting IP");
+    while (attemptsCounter < 2) {
+      attemptsCounter++;
+      espSerial.println("IP");
+      delay(1000);
+      if (espSerial.available()) {
+        String ipString = espSerial.readString();
+        delay(500);
+        String ip = ipString.substring(2, ipString.length());
+        Serial.print(ip);
+        return ip;
+      }
+
+    }
+
+    return  _ipAddress;
+  }
+}
+
+
 
