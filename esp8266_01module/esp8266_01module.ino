@@ -85,6 +85,7 @@ void loop() {
       byte indexOfEndValue = dataFromArduino.indexOf(EndOftransmissionCommand);
       TemperatureDataToBeSend = dataFromArduino.substring(indexOfStartValue, indexOfStartValue + (indexOfEndValue - indexOfStartValue));
       sendDataToBroker();
+      Serial.println(OkResponse);
       return;
     }
     if (dataFromArduino.indexOf(PostPreasureCommand) > -1 && dataFromArduino.indexOf(EndOftransmissionCommand) > -1 ) {
