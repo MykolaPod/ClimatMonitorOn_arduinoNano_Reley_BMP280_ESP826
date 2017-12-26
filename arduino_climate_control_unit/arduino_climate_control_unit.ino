@@ -15,13 +15,18 @@
 #define ErrorCodeForSensorsData -500
 #define EspRxPinOnArduino 11
 #define EspTxPinOnArduino 10
+#define ButtonPin 14 //A0
+String PostTemperatureCommand = "POST_TEMP";
+String PostPreasureCommand = "POST_PREA";
+String PostModeCommand = "POST_MODE";
+String EndOftransmissionCommand = "EOT";
 
 SoftwareSerial espSerial(EspRxPinOnArduino, EspTxPinOnArduino); // RX, TX
 
 Adafruit_BMP280 bmp; // I2C // pin 3 - Serial clock out (SCLK) // pin 4 - Serial data out (DIN)// pin 5 - Data/Command select (D/C)// pin 6 - LCD chip select (CS)// pin 7 - LCD reset (RST)
 Adafruit_PCD8544 display = Adafruit_PCD8544(3, 4, 5, 6, 7);
 
-bool _releyState = false; //false OFF, true ON
+String _releyState = "OFF"; //false OFF, true ON
 bool _isBmpOk = false;
 bool _isEspOk = false;
 bool _isWiFiOk = false;
@@ -29,9 +34,22 @@ bool _isInitialized = false;
 String _ipAddress = "N/A";
 float _bmpPreasure = ErrorCodeForSensorsData;
 float _bmpTemp = ErrorCodeForSensorsData;
-
 bool _isLastSendDataFailed = true;
+unsigned long _previousMillisMain = 0;
+unsigned long _previousMillisBtn = 0;
+unsigned long _previousMillisShowScreen = 0;
+unsigned long _previousMillisCheckEsp = 0;
+bool _isButtonPressed = false;
+byte _screenNumber = 0;
+int _timeButtonHolded = 0;
 
+void(* resetFunc) (void) = 0;
+
+enum PostDataTypes {
+  Temperature,
+  Preasure,
+  Mode
+};
 
 const static unsigned char PROGMEM logoBmp[] =
 {
@@ -74,23 +92,53 @@ void setup() {
   Serial.begin(115200);
   initialize();
   displayModuleSatuses();
+  delay(2000);
+  _screenNumber = 1;
 }
 
 void loop() {
-  if (espSerial.available() > 0) {
-    espSerial.read();
+  unsigned long currentMillis = millis();
+  if (currentMillis - _previousMillisMain >= 1000) {
+
+    _previousMillisMain = currentMillis;
+
+    _bmpTemp = getBmpTemp();
+    _bmpPreasure = getBmpPreasure();
+    _releyState = getReleyState();
+
+    modeController();
   }
 
-  _bmpTemp = getBmpTemp();
-  _bmpPreasure = getBmpPreasure();
-  _releyState = getReleyState();
+  if (currentMillis - _previousMillisBtn >= 100) {
+    _previousMillisBtn = currentMillis;
+    checkButton();
+    if (currentMillis - _previousMillisShowScreen >= 1000) {
+      _previousMillisShowScreen = currentMillis;
+      switch (_screenNumber) {
+        case 0:
+          displayModuleSatuses();
+          break;
+        default:
+          displayParameters(_bmpTemp, _bmpPreasure, _releyState);
+          break;
+      }      
+    }
+  }
 
-  modeController();
-  displayParameters(_bmpTemp, _bmpPreasure, _releyState);
-  delay(2000);
+  if (currentMillis - _previousMillisCheckEsp >= 60000) {
+    _previousMillisCheckEsp = currentMillis;
+    checkEsp();
+    if(_isEspOk && _isWiFiOk && _ipAddress.length() && _ipAddress != "N/A"){
+      postData(Temperature, String(_bmpTemp));
+      postData(Preasure, String(_bmpPreasure));
+      postData(Mode, _releyState);
+    }
+  }
+
 }
 
 void initialize () {
+  initButton();
   initDisplay();
   initRelay();
   initBmp();
@@ -98,6 +146,9 @@ void initialize () {
 
   delay(1000);
   _isInitialized = true;
+}
+void initButton() {
+  digitalWrite(ButtonPin, HIGH);
 }
 
 void initDisplay() {
@@ -126,6 +177,10 @@ void initBmp() {
 void initEsp() {
   espSerial.begin(9600); //default baud rate for current firmware
   delay(500);
+  checkEsp();
+
+}
+void checkEsp() {
   _isEspOk = getEspState();
   if (_isEspOk) {
     _isWiFiOk = getWiFiStatus();
@@ -133,46 +188,35 @@ void initEsp() {
       _ipAddress = getIP();
     }
   }
-
 }
 
-void displayModuleSatuses() {
+void displayModuleSatuses() {  // screen 0
   display.clearDisplay();
   display.display();
   display.setTextSize(1);
   display.setCursor(0, 0);
 
   display.print("BMP280: ");
-  if (!bmp.begin()) {
+  if (!_isBmpOk) {
     display.println(FailString);
   }
   else {
     display.println(OkString);
   }
 
-  display.print("Mode: ");
-  if (getReleyState()) {
-    display.println(OnString);
-  } else {
-    display.println(OffString);
-  }
-
+  display.print("Mode: ");  
+  display.println(getReleyState());
   display.println("WIFI: ");
-
   if (!_isEspOk) {
     display.println(FailString);
   }
   else {
-
     display.println(_ipAddress);
-
   }
-
   display.display();
-  delay(10000);
 }
 
-void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
+void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) { // screen 1 default
   if (!_isInitialized) {
     return;
   }
@@ -196,12 +240,9 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) {
     display.println(" %");
     display.drawLine(0, 34, display.width(), 34, BLACK);
     display.setCursor(0, 36);
-    display.print("Mode: ");
-    if (getReleyState()) {
-      display.println(OnString);
-    } else {
-      display.println(OffString);
-    }
+    display.print("Mode: ");   
+    display.println(getReleyState());   
+  
     display.display();
   }
 }
@@ -222,12 +263,12 @@ void modeController() {
 
 void turnReleyOn () {
   digitalWrite(RelayPin, LOW);
-  _releyState = true;
+  _releyState = "ON";
 }
 
 void turnReleyOff () {
   digitalWrite(RelayPin, HIGH);
-  _releyState = false;
+  _releyState = "OFF";
 }
 
 float getBmpTemp() {
@@ -248,13 +289,17 @@ float getBmpPreasure() {
   }
 }
 
-bool getReleyState() {
-  return _releyState;
+String getReleyState() {
+  if (_releyState) {
+    return OnString;
+  } else {
+   return OffString;
+  }  
 }
 
 bool getEspState () {
   byte attemptsCounter = 0;
-
+  _ipAddress = "N/A";
   if (!espSerial) {
     _isEspOk = false;
     return _isEspOk;
@@ -294,14 +339,15 @@ bool getWiFiStatus() {
       if (espSerial.available()) {
         if (espSerial.find("3")) {
           Serial.println(">WIFI OK");
-          return true;
+          _isWiFiOk = true;
         }
         else {
-          return false;
+          _isWiFiOk = false;
         }
       }
     }
   }
+  return _isWiFiOk;
 }
 String getIP() {
   byte attemptsCounter = 0;
@@ -323,12 +369,90 @@ String getIP() {
         Serial.print(ip);
         return ip;
       }
-
     }
-
     return  _ipAddress;
   }
 }
+void resetEspAndArduino() {
+  byte attemptsCounter = 0;
+  if (!espSerial) {
+    _isEspOk = false;
+    return;
+  }
+  else {
+    Serial.println("reseting ESP");
+    while (attemptsCounter < 5) {
+      attemptsCounter++;
+      espSerial.println("RST");
+      delay(1000);
+      if (espSerial.available()) {
+        if (espSerial.find(OkString)) {
+          Serial.println(">Esp OK");
+          break;
+        }
+      }
+    }
+    resetFunc();
+    delay(100);
+    return;
+  }
+}
 
+void checkButton() {
+  if (digitalRead(ButtonPin) == LOW ) {
+    _timeButtonHolded++;
+    if (!_isButtonPressed) {
+      _isButtonPressed = true;
+      if (_screenNumber < 1) {
+        _screenNumber++;
+      } else {
+        _screenNumber = 0;
+      }
+    }
+    Serial.print("btn holded during ");
+    Serial.println(_timeButtonHolded * 100);// delay for this method
+    if (_timeButtonHolded >= 100) {
+      resetEspAndArduino();
+    }
+  }
+  if (digitalRead(ButtonPin) == HIGH && _isButtonPressed) {
+    _isButtonPressed = false;
+    _timeButtonHolded = 0;
+  }
+}
+
+void postData(PostDataTypes type, String data) {
+  byte attemptsCounter = 0;
+  if (_isWiFiOk) {
+    Serial.print("post ");
+    Serial.println(type);
+    String command;
+    switch (type) {
+      case Temperature:
+        command += PostTemperatureCommand;
+        break;
+      case Preasure:
+        command += PostPreasureCommand;
+        break;
+      case Mode:
+        command += PostModeCommand;
+        break;
+    }
+    command += data;
+    command += EndOftransmissionCommand;
+    espSerial.println(command);
+    delay(1000);
+    if (espSerial.available()) {
+      if (espSerial.find(OkString)) {
+        // do not wait response
+        
+        _isWiFiOk = true;
+      }
+      else {
+        //_isWiFiOk = false;
+      }
+    }
+  }
+}
 
 
