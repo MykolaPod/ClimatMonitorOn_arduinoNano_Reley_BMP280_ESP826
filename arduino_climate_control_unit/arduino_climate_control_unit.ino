@@ -15,7 +15,8 @@
 #define ErrorCodeForSensorsData -500
 #define EspRxPinOnArduino 11
 #define EspTxPinOnArduino 10
-#define ButtonPin 14 //A0
+#define SwitchDisplayButtonPin 14 //A0
+#define SwitchModeButtonPin 15 //A0
 String PostTemperatureCommand = "POST_TEMP";
 String PostPreasureCommand = "POST_PREA";
 String PostModeCommand = "POST_MODE";
@@ -39,7 +40,7 @@ unsigned long _previousMillisMain = 0;
 unsigned long _previousMillisBtn = 0;
 unsigned long _previousMillisShowScreen = 0;
 unsigned long _previousMillisCheckEsp = 0;
-bool _isButtonPressed = false;
+bool _isSwichDisplayButtonPressed = false;
 byte _screenNumber = 0;
 int _timeButtonHolded = 0;
 
@@ -111,24 +112,28 @@ void loop() {
 
   if (currentMillis - _previousMillisBtn >= 100) {
     _previousMillisBtn = currentMillis;
-    checkButton();
+    checkSwitchDisplayButton();
+    checkSwitchModeButton();
     if (currentMillis - _previousMillisShowScreen >= 1000) {
       _previousMillisShowScreen = currentMillis;
       switch (_screenNumber) {
         case 0:
-          displayModuleSatuses();
+          displayAbout();
           break;
-        default:
+        case 1:
           displayParameters(_bmpTemp, _bmpPreasure, _releyState);
           break;
-      }      
+        case 2:
+          displayModuleSatuses();
+          break;
+      }
     }
   }
 
   if (currentMillis - _previousMillisCheckEsp >= 60000) {
     _previousMillisCheckEsp = currentMillis;
     checkEsp();
-    if(_isEspOk && _isWiFiOk && _ipAddress.length() && _ipAddress != "N/A"){
+    if (_isEspOk && _isWiFiOk && _ipAddress.length() && _ipAddress != "N/A") {
       postData(Temperature, String(_bmpTemp));
       postData(Preasure, String(_bmpPreasure));
       postData(Mode, _releyState);
@@ -138,7 +143,7 @@ void loop() {
 }
 
 void initialize () {
-  initButton();
+  initButtons();
   initDisplay();
   initRelay();
   initBmp();
@@ -147,8 +152,9 @@ void initialize () {
   delay(1000);
   _isInitialized = true;
 }
-void initButton() {
-  digitalWrite(ButtonPin, HIGH);
+void initButtons() {
+  digitalWrite(SwitchDisplayButtonPin, HIGH);
+  digitalWrite(SwitchModeButtonPin, HIGH);  
 }
 
 void initDisplay() {
@@ -204,7 +210,7 @@ void displayModuleSatuses() {  // screen 0
     display.println(OkString);
   }
 
-  display.print("Mode: ");  
+  display.print("Mode: ");
   display.println(getReleyState());
   display.println("WIFI: ");
   if (!_isEspOk) {
@@ -240,9 +246,26 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) { // 
     display.println(" %");
     display.drawLine(0, 34, display.width(), 34, BLACK);
     display.setCursor(0, 36);
-    display.print("Mode: ");   
-    display.println(getReleyState());   
-  
+    display.print("Mode: ");
+    display.println(getReleyState());
+
+    display.display();
+  }
+}
+
+void displayAbout () {
+  if (!_isInitialized) {
+    return;
+  }
+  else {
+    display.clearDisplay();
+    display.display();
+    display.setCursor(0, 0);
+    display.println("Author:Mykola");   
+    display.println("Pidopryhora");
+    display.println("");
+    display.println("88.genreal@");
+    display.println("gmail.com");
     display.display();
   }
 }
@@ -293,8 +316,8 @@ String getReleyState() {
   if (_releyState) {
     return OnString;
   } else {
-   return OffString;
-  }  
+    return OffString;
+  }
 }
 
 bool getEspState () {
@@ -325,6 +348,7 @@ bool getEspState () {
 
 bool getWiFiStatus() {
   byte attemptsCounter = 0;
+  byte waitFor = 0;
   if (!espSerial) {
     _isEspOk = false;
     return _isEspOk;
@@ -335,22 +359,34 @@ bool getWiFiStatus() {
       attemptsCounter++;
       Serial.println("send WIFISTATUS");
       espSerial.println("WIFISTATUS");
-      delay(1000);
+      delay(500);
+      while (!espSerial.available()) {
+        if (waitFor > 5) {
+          break;
+        }
+        Serial.println("wait");
+        waitFor++;
+        delay(500);
+      }
       if (espSerial.available()) {
         if (espSerial.find("3")) {
           Serial.println(">WIFI OK");
           _isWiFiOk = true;
+          break;
         }
         else {
           _isWiFiOk = false;
         }
+      }
+      else {
+        _isWiFiOk = false;
       }
     }
   }
   return _isWiFiOk;
 }
 String getIP() {
-  byte attemptsCounter = 0;
+  byte waitFor = 0;
   _ipAddress = "N/A";
   if (!espSerial) {
     _isEspOk = false;
@@ -358,17 +394,25 @@ String getIP() {
   }
   else {
     Serial.println("getting IP");
-    while (attemptsCounter < 2) {
-      attemptsCounter++;
-      espSerial.println("IP");
-      delay(1000);
-      if (espSerial.available()) {
-        String ipString = espSerial.readString();
-        delay(500);
-        String ip = ipString.substring(2, ipString.length());
-        Serial.print(ip);
-        return ip;
+    espSerial.println("IP");
+    delay(500);
+    while (!espSerial.available()) {
+      if (waitFor > 7) {
+        break;
       }
+      Serial.println("wait for send response");
+      waitFor++;
+      delay(500);
+    }
+    String ipString = espSerial.readString();   
+    delay(500);
+    Serial.println(ipString);
+    String ip = ipString.substring(2, ipString.length());    
+    if (ip.length() < 7) {
+      _ipAddress = "N/A";
+    }
+    else {
+      _ipAddress = ip;
     }
     return  _ipAddress;
   }
@@ -398,12 +442,12 @@ void resetEspAndArduino() {
   }
 }
 
-void checkButton() {
-  if (digitalRead(ButtonPin) == LOW ) {
+void checkSwitchDisplayButton() {
+  if (digitalRead(SwitchDisplayButtonPin) == LOW ) {
     _timeButtonHolded++;
-    if (!_isButtonPressed) {
-      _isButtonPressed = true;
-      if (_screenNumber < 1) {
+    if (!_isSwichDisplayButtonPressed) {
+      _isSwichDisplayButtonPressed = true;
+      if (_screenNumber < 2) {
         _screenNumber++;
       } else {
         _screenNumber = 0;
@@ -415,14 +459,38 @@ void checkButton() {
       resetEspAndArduino();
     }
   }
-  if (digitalRead(ButtonPin) == HIGH && _isButtonPressed) {
-    _isButtonPressed = false;
+  if (digitalRead(SwitchDisplayButtonPin) == HIGH && _isSwichDisplayButtonPressed) {
+    _isSwichDisplayButtonPressed = false;
+    _timeButtonHolded = 0;
+  }
+}
+
+void checkSwitchModeButton(){
+  if (digitalRead(SwitchModeButtonPin) == LOW ) {
+    _timeButtonHolded++;
+    if (!_isSwichDisplayButtonPressed) {
+      _isSwichDisplayButtonPressed = true;
+      if (_screenNumber < 2) {
+        _screenNumber++;
+      } else {
+        _screenNumber = 0;
+      }
+    }
+    Serial.print("btn holded during ");
+    Serial.println(_timeButtonHolded * 100);// delay for this method
+    if (_timeButtonHolded >= 100) {
+      resetEspAndArduino();
+    }
+  }
+  if (digitalRead(SwitchDisplayButtonPin) == HIGH && _isSwichDisplayButtonPressed) {
+    _isSwichDisplayButtonPressed = false;
     _timeButtonHolded = 0;
   }
 }
 
 void postData(PostDataTypes type, String data) {
-  byte attemptsCounter = 0;
+
+  byte waitFor = 0;
   if (_isWiFiOk) {
     Serial.print("post ");
     Serial.println(type);
@@ -440,17 +508,24 @@ void postData(PostDataTypes type, String data) {
     }
     command += data;
     command += EndOftransmissionCommand;
+    Serial.print("Sending ");
+    Serial.println(command);
     espSerial.println(command);
-    delay(1000);
-    if (espSerial.available()) {
-      if (espSerial.find(OkString)) {
-        // do not wait response
-        
-        _isWiFiOk = true;
+    delay(500);
+    while (!espSerial.available()) {
+      if (waitFor > 7) {
+        break;
       }
-      else {
-        //_isWiFiOk = false;
-      }
+      Serial.println("wait for send response");
+      waitFor++;
+      delay(500);
+    }
+    if (espSerial.find(OkString)) {
+      Serial.println(">Esp OK");
+      _isWiFiOk = true;
+    }
+    else {
+      Serial.println(espSerial.readString());
     }
   }
 }
