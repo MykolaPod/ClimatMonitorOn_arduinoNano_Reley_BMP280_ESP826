@@ -13,7 +13,7 @@ String deviceId = "";
 String authToken = "";
 #define bmp_preasure_topic "iot-2/evt/preasure/fmt/json"
 #define bmp_temperature_topic "iot-2/evt/temperature/fmt/json"
-#define device_mode_topic "iot-2/evt/device_mode/fmt/json"
+#define device_mode_topic "iot-2/evt/mode/fmt/json"
 #define subscribeCommandTopic "iot-2/cmd/temperature/fmt/json"
 String server = orgId + ".messaging.internetofthings.ibmcloud.com";
 #define WiFiSSID ""
@@ -28,6 +28,7 @@ bool _isWiFiConnected = false;
 String TemperatureDataToBeSend = "";
 String PreasureDataToBeSend = "";
 String ModeDataToBeSend = "";
+byte _failedWifiConnectionAttempts = 0;
 WiFiClient wifiClient;
 
 void callback(char* topic, byte* payload, unsigned int payloadLength);
@@ -49,8 +50,10 @@ void setup() {
 
 
 void loop() {
-
-
+  if(_failedWifiConnectionAttempts > 5){    
+    ESP.reset();
+    return;
+  }
   if (Serial.available()) {
     String dataFromArduino = Serial.readString();
 
@@ -73,6 +76,9 @@ void loop() {
     if (dataFromArduino == "BROKERSTATUS\r\n") {
       Serial.println(mqttClient.connected());
       return;
+    }
+    if(dataFromArduino == "RST\r\n"){
+      ESP.reset();
     }
     if (dataFromArduino.indexOf(PostTemperatureCommand) > -1 && dataFromArduino.indexOf(EndOftransmissionCommand) > -1 ) {
       byte indexOfStartValue = dataFromArduino.indexOf(PostTemperatureCommand) + PostTemperatureCommand.length();
@@ -101,10 +107,12 @@ void loop() {
   }
 
 
-  if (!_isWiFiConnected) {
+  if (!_isWiFiConnected) {    
+    _failedWifiConnectionAttempts++;
     tryConnectToWifi(WiFiSSID, WiFiPassword);
   }
   if (_isWiFiConnected) {
+    _failedWifiConnectionAttempts = 0;
     connectToMqtt();
   }
   mqttClient.loop();
@@ -136,9 +144,9 @@ void sendDataToBroker() {
   }
  
   if (ModeDataToBeSend.length() > 0) {
-    String payload_mode = "{\"d\":{\"device_mode\":";;
+    String payload_mode = "{\"d\":{\"mode\":\"";;
     payload_mode += ModeDataToBeSend;
-    payload_mode += "}}";
+    payload_mode += "\"}}";
     mqttClient.publish(device_mode_topic, (char*) payload_mode.c_str());
     ModeDataToBeSend = "";
   }
@@ -146,16 +154,22 @@ void sendDataToBroker() {
 }
 
 bool tryConnectToWifi(char* ssid, char* password) {
+  byte attempts = 0;
   if (_isWiFiConnected) {
     return true;
   }
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(ssid, password);
-  _isWiFiConnected = WiFi.status() == WL_CONNECTED;
-  if (!isWiFiConnected()) {
-    delay(1000);
-    _isWiFiConnected = WiFi.status() == WL_CONNECTED;
+  while(WiFi.status() != WL_CONNECTED){
+    attempts++;
+    if(attempts > 10 ){
+      break;
+    }    
+    delay(300);
   }
+  
+    _isWiFiConnected = WiFi.status() == WL_CONNECTED;
+  
 
   return _isWiFiConnected;
 }
@@ -183,12 +197,12 @@ void connectToMqtt() {
   if (mqttClient.subscribe(subscribeCommandTopic)) {
     //Serial.println(" client subscribed OK");
   } else {
-    Serial.println("client subscribed FAILED");
+    //Serial.println("client subscribed FAILED");
   }
 }
 
 void callback(char* topic, byte* payload, unsigned int payloadLength) {
-  Serial.print("gotMsg: invoked for topic: "); Serial.println(topic);
+  //Serial.print("gotMsg: invoked for topic: "); Serial.println(topic);
 
 //  if (String(topic).indexOf(CMD_STATE) > 0) {
 //    String cmd = "";
