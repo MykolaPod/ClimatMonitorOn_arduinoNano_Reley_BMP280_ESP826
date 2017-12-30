@@ -1,11 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
-#include <DHT.h>
 #include <PubSubClient.h>
-
-#define DHTPIN 2
-#define DHTTYPE DHT22
-#define GetSensorsDataInterval 60000
 
 String orgId = "";
 String deviceType = "ControlUnit";
@@ -39,18 +34,16 @@ void setup() {
   while (!Serial) {
     ;
   }
-
   tryConnectToWifi(WiFiSSID, WiFiPassword);
   if (_isWiFiConnected) {
     connectToMqtt();
   }
   mqttClient.setCallback (callback);
-
 }
 
 
 void loop() {
-  if(_failedWifiConnectionAttempts > 5){    
+  if (_failedWifiConnectionAttempts > 5) {
     ESP.reset();
     return;
   }
@@ -77,7 +70,7 @@ void loop() {
       Serial.println(mqttClient.connected());
       return;
     }
-    if(dataFromArduino == "RST\r\n"){
+    if (dataFromArduino == "RST\r\n") {
       ESP.reset();
     }
     if (dataFromArduino.indexOf(PostTemperatureCommand) > -1 && dataFromArduino.indexOf(EndOftransmissionCommand) > -1 ) {
@@ -104,11 +97,9 @@ void loop() {
       Serial.println(OkResponse);
       return;
     }
-
   }
 
-
-  if (!_isWiFiConnected) {    
+  if (!_isWiFiConnected) {
     _failedWifiConnectionAttempts++;
     tryConnectToWifi(WiFiSSID, WiFiPassword);
   }
@@ -120,14 +111,12 @@ void loop() {
 }
 
 void sendDataToBroker() {
-
   if (!mqttClient.connected()) {
     connectToMqtt();
   }
   if (!mqttClient.connected()) {
     return;
   }
-  
   if (TemperatureDataToBeSend.length() > 0) {
     String payload_temp = "{\"d\":{\"temperature\":";
     payload_temp += TemperatureDataToBeSend;
@@ -135,7 +124,6 @@ void sendDataToBroker() {
     mqttClient.publish(bmp_temperature_topic, (char*) payload_temp.c_str());
     TemperatureDataToBeSend = "";
   }
-
   if (PreasureDataToBeSend.length() > 0) {
     String payload_preasure = "{\"d\":{\"preasure\":";;
     payload_preasure += PreasureDataToBeSend;
@@ -143,7 +131,6 @@ void sendDataToBroker() {
     mqttClient.publish(bmp_preasure_topic, (char*) payload_preasure.c_str());
     PreasureDataToBeSend = "";
   }
- 
   if (ModeDataToBeSend.length() > 0) {
     String payload_mode = "{\"d\":{\"mode\":\"";;
     payload_mode += ModeDataToBeSend;
@@ -151,7 +138,6 @@ void sendDataToBroker() {
     mqttClient.publish(device_mode_topic, (char*) payload_mode.c_str());
     ModeDataToBeSend = "";
   }
-
 }
 
 bool tryConnectToWifi(char* ssid, char* password) {
@@ -161,17 +147,14 @@ bool tryConnectToWifi(char* ssid, char* password) {
   }
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(ssid, password);
-  while(WiFi.status() != WL_CONNECTED){
+  while (WiFi.status() != WL_CONNECTED) {
     attempts++;
-    if(attempts > 10 ){
+    if (attempts > 10 ) {
       break;
-    }    
+    }
     delay(300);
   }
-  
-    _isWiFiConnected = WiFi.status() == WL_CONNECTED;
-  
-
+  _isWiFiConnected = WiFi.status() == WL_CONNECTED;
   return _isWiFiConnected;
 }
 
@@ -205,15 +188,15 @@ void connectToMqtt() {
 void callback(char* topic, byte* payload, unsigned int payloadLength) {
   //Serial.print("gotMsg: invoked for topic: "); Serial.println(topic);
 
-//  if (String(topic).indexOf(CMD_STATE) > 0) {
-//    String cmd = "";
-//    for (int i = 0; i < payloadLength; i++) {
-//      cmd += (char)payload[i];
-//    }
-//    
-//  } else {
-//    Serial.print("gotMsg: unexpected topic: "); Serial.println(topic);
-//  }
+  //  if (String(topic).indexOf(CMD_STATE) > 0) {
+  //    String cmd = "";
+  //    for (int i = 0; i < payloadLength; i++) {
+  //      cmd += (char)payload[i];
+  //    }
+  //
+  //  } else {
+  //    Serial.print("gotMsg: unexpected topic: "); Serial.println(topic);
+  //  }
 }
 
 
