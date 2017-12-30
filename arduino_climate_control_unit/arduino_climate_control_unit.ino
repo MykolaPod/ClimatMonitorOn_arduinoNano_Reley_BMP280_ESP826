@@ -6,6 +6,12 @@
 #include <Adafruit_BMP280.h>
 #include <SoftwareSerial.h>
 
+enum PostDataTypes {
+  Temperature,
+  Preasure,
+  Mode
+};
+
 
 #define FailString "FAIL"
 #define OkString "OK"
@@ -27,7 +33,7 @@ SoftwareSerial espSerial(EspRxPinOnArduino, EspTxPinOnArduino); // RX, TX
 Adafruit_BMP280 bmp; // I2C // pin 3 - Serial clock out (SCLK) // pin 4 - Serial data out (DIN)// pin 5 - Data/Command select (D/C)// pin 6 - LCD chip select (CS)// pin 7 - LCD reset (RST)
 Adafruit_PCD8544 display = Adafruit_PCD8544(3, 4, 5, 6, 7);
 
-String _releyState = "OFF"; //false OFF, true ON
+String _releyState = "OFF"; //OFF, ON
 bool _isBmpOk = false;
 bool _isEspOk = false;
 bool _isWiFiOk = false;
@@ -46,11 +52,7 @@ int _timeButtonHolded = 0;
 
 void(* resetFunc) (void) = 0;
 
-enum PostDataTypes {
-  Temperature,
-  Preasure,
-  Mode
-};
+
 
 const static unsigned char PROGMEM logoBmp[] =
 {
@@ -105,7 +107,7 @@ void loop() {
 
     _bmpTemp = getBmpTemp();
     _bmpPreasure = getBmpPreasure();
-    _releyState = getReleyState();
+    _releyState = getRelayState();
 
     modeController();
   }
@@ -132,6 +134,7 @@ void loop() {
 
   if (currentMillis - _previousMillisCheckEsp >= 60000) {
     _previousMillisCheckEsp = currentMillis;
+    displaySyncing();
     checkEsp();
     if (_isEspOk && _isWiFiOk && _ipAddress.length() && _ipAddress != "N/A") {
       postData(Temperature, String(_bmpTemp));
@@ -154,7 +157,7 @@ void initialize () {
 }
 void initButtons() {
   digitalWrite(SwitchDisplayButtonPin, HIGH);
-  digitalWrite(SwitchModeButtonPin, HIGH);  
+  digitalWrite(SwitchModeButtonPin, HIGH);
 }
 
 void initDisplay() {
@@ -211,7 +214,7 @@ void displayModuleSatuses() {  // screen 0
   }
 
   display.print("Mode: ");
-  display.println(getReleyState());
+  display.println(getRelayState());
   display.println("WIFI: ");
   if (!_isEspOk) {
     display.println(FailString);
@@ -247,13 +250,13 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) { // 
     display.drawLine(0, 34, display.width(), 34, BLACK);
     display.setCursor(0, 36);
     display.print("Mode: ");
-    display.println(getReleyState());
+    display.println(getRelayState());
 
     display.display();
   }
 }
 
-void displayAbout () {
+void displayAbout() {
   if (!_isInitialized) {
     return;
   }
@@ -261,11 +264,26 @@ void displayAbout () {
     display.clearDisplay();
     display.display();
     display.setCursor(0, 0);
-    display.println("Author:Mykola");   
+    display.println("Author:Mykola");
     display.println("Pidopryhora");
     display.println("");
     display.println("88.genreal@");
     display.println("gmail.com");
+    display.display();
+  }
+}
+
+void displaySyncing() {
+  if (!_isInitialized) {
+    return;
+  }
+  else {
+    display.clearDisplay();
+    display.display();
+    display.setCursor(20, 15);
+    display.print("syncing");
+    display.setCursor(10, 23);
+    display.print("please wait");
     display.display();
   }
 }
@@ -284,15 +302,16 @@ void modeController() {
 
 }
 
-void turnReleyOn () {
+void turnReleyOn() {
   digitalWrite(RelayPin, LOW);
   _releyState = "ON";
 }
 
-void turnReleyOff () {
+void turnReleyOff() {
   digitalWrite(RelayPin, HIGH);
   _releyState = "OFF";
 }
+
 
 float getBmpTemp() {
   if (_isBmpOk) {
@@ -312,7 +331,7 @@ float getBmpPreasure() {
   }
 }
 
-String getReleyState() {
+String getRelayState() {
   if (_releyState) {
     return OnString;
   } else {
@@ -404,10 +423,10 @@ String getIP() {
       waitFor++;
       delay(500);
     }
-    String ipString = espSerial.readString();   
+    String ipString = espSerial.readString();
     delay(500);
     Serial.println(ipString);
-    String ip = ipString.substring(2, ipString.length());    
+    String ip = ipString.substring(2, ipString.length());
     if (ip.length() < 7) {
       _ipAddress = "N/A";
     }
@@ -465,7 +484,7 @@ void checkSwitchDisplayButton() {
   }
 }
 
-void checkSwitchModeButton(){
+void checkSwitchModeButton() {
   if (digitalRead(SwitchModeButtonPin) == LOW ) {
     _timeButtonHolded++;
     if (!_isSwichDisplayButtonPressed) {
