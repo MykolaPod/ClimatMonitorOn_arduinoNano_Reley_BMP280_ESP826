@@ -17,6 +17,7 @@ enum PostDataTypes {
 #define OkString "OK"
 #define OnString "ON"
 #define OffString "OFF"
+#define AutoString "AUTO"
 #define RelayPin 8
 #define ErrorCodeForSensorsData -500
 #define EspRxPinOnArduino 11
@@ -33,7 +34,7 @@ SoftwareSerial espSerial(EspRxPinOnArduino, EspTxPinOnArduino); // RX, TX
 Adafruit_BMP280 bmp; // I2C // pin 3 - Serial clock out (SCLK) // pin 4 - Serial data out (DIN)// pin 5 - Data/Command select (D/C)// pin 6 - LCD chip select (CS)// pin 7 - LCD reset (RST)
 Adafruit_PCD8544 display = Adafruit_PCD8544(3, 4, 5, 6, 7);
 
-String _releyState = "OFF"; //OFF, ON
+
 bool _isBmpOk = false;
 bool _isEspOk = false;
 bool _isWiFiOk = false;
@@ -47,8 +48,11 @@ unsigned long _previousMillisBtn = 0;
 unsigned long _previousMillisShowScreen = 0;
 unsigned long _previousMillisCheckEsp = 0;
 bool _isSwichDisplayButtonPressed = false;
-byte _screenNumber = 0;
-int _timeButtonHolded = 0;
+bool _isSwichModeButtonPressed = false;
+byte _screenNumber = 0; // 1 displayParameters (default), 2 display module states, 0 author about
+byte _modeNumber = 0; //AUTO (default), ON, OFF
+byte _timeSwitchDisplayButtonHolded = 0;
+
 
 void(* resetFunc) (void) = 0;
 
@@ -107,7 +111,7 @@ void loop() {
 
     _bmpTemp = getBmpTemp();
     _bmpPreasure = getBmpPreasure();
-    _releyState = getRelayState();
+
 
     modeController();
   }
@@ -123,7 +127,7 @@ void loop() {
           displayAbout();
           break;
         case 1:
-          displayParameters(_bmpTemp, _bmpPreasure, _releyState);
+          displayParameters(_bmpTemp, _bmpPreasure, getMode());
           break;
         case 2:
           displayModuleSatuses();
@@ -139,7 +143,7 @@ void loop() {
     if (_isEspOk && _isWiFiOk && _ipAddress.length() && _ipAddress != "N/A") {
       postData(Temperature, String(_bmpTemp));
       postData(Preasure, String(_bmpPreasure));
-      postData(Mode, _releyState);
+      postData(Mode, getMode());
     }
   }
 
@@ -199,7 +203,7 @@ void checkEsp() {
   }
 }
 
-void displayModuleSatuses() {  // screen 0
+void displayModuleSatuses() {  // screen 2
   display.clearDisplay();
   display.display();
   display.setTextSize(1);
@@ -214,7 +218,7 @@ void displayModuleSatuses() {  // screen 0
   }
 
   display.print("Mode: ");
-  display.println(getRelayState());
+  display.println(getMode());
   display.println("WIFI: ");
   if (!_isEspOk) {
     display.println(FailString);
@@ -250,13 +254,13 @@ void displayParameters (float bmpTemp, float bmpPreasure, bool releyState) { // 
     display.drawLine(0, 34, display.width(), 34, BLACK);
     display.setCursor(0, 36);
     display.print("Mode: ");
-    display.println(getRelayState());
+    display.println(getMode());
 
     display.display();
   }
 }
 
-void displayAbout() {
+void displayAbout() { //screen 0
   if (!_isInitialized) {
     return;
   }
@@ -289,29 +293,32 @@ void displaySyncing() {
 }
 
 void modeController() {
-  if (_bmpTemp == ErrorCodeForSensorsData) {
-    return;
-  }
 
-  if (_bmpTemp > 28.00) {
-    turnReleyOn();
+  switch (_modeNumber) {
+    case 1: //on
+      turnReleyOn();
+      return;
+    case 2: //off
+      turnReleyOff();
+      return;
+    default: //auto
+      if (_bmpTemp > 28.00) {
+        turnReleyOn();
+      }
+      if (_bmpTemp < 27.00) {
+        turnReleyOff();
+      }
+      return;
   }
-  if (_bmpTemp < 27.00) {
-    turnReleyOff();
-  }
-
 }
 
 void turnReleyOn() {
   digitalWrite(RelayPin, LOW);
-  _releyState = "ON";
 }
 
 void turnReleyOff() {
   digitalWrite(RelayPin, HIGH);
-  _releyState = "OFF";
 }
-
 
 float getBmpTemp() {
   if (_isBmpOk) {
@@ -331,11 +338,14 @@ float getBmpPreasure() {
   }
 }
 
-String getRelayState() {
-  if (_releyState) {
-    return OnString;
-  } else {
-    return OffString;
+String getMode() {
+  switch (_modeNumber) {
+    case 1:
+      return OnString;
+    case 2:
+      return OffString;
+    default:
+      return AutoString;
   }
 }
 
@@ -364,7 +374,6 @@ bool getEspState () {
   }
   return _isEspOk;
 }
-
 bool getWiFiStatus() {
   byte attemptsCounter = 0;
   byte waitFor = 0;
@@ -462,8 +471,11 @@ void resetEspAndArduino() {
 }
 
 void checkSwitchDisplayButton() {
+  if (_isSwichModeButtonPressed) {
+    return;
+  }
   if (digitalRead(SwitchDisplayButtonPin) == LOW ) {
-    _timeButtonHolded++;
+    _timeSwitchDisplayButtonHolded++;
     if (!_isSwichDisplayButtonPressed) {
       _isSwichDisplayButtonPressed = true;
       if (_screenNumber < 2) {
@@ -472,38 +484,36 @@ void checkSwitchDisplayButton() {
         _screenNumber = 0;
       }
     }
-    Serial.print("btn holded during ");
-    Serial.println(_timeButtonHolded * 100);// delay for this method
-    if (_timeButtonHolded >= 100) {
+    Serial.print("display btn holded during ");
+    Serial.println(_timeSwitchDisplayButtonHolded * 100);// delay for this method
+    if (_timeSwitchDisplayButtonHolded >= 100) {
       resetEspAndArduino();
     }
   }
   if (digitalRead(SwitchDisplayButtonPin) == HIGH && _isSwichDisplayButtonPressed) {
     _isSwichDisplayButtonPressed = false;
-    _timeButtonHolded = 0;
+    _timeSwitchDisplayButtonHolded = 0;
   }
 }
 
 void checkSwitchModeButton() {
+  if (_isSwichDisplayButtonPressed) {
+    return;
+  }
   if (digitalRead(SwitchModeButtonPin) == LOW ) {
-    _timeButtonHolded++;
-    if (!_isSwichDisplayButtonPressed) {
-      _isSwichDisplayButtonPressed = true;
-      if (_screenNumber < 2) {
-        _screenNumber++;
+    if (!_isSwichModeButtonPressed) {
+      _isSwichModeButtonPressed = true;
+      if (_modeNumber < 2) {
+        _modeNumber++;
       } else {
-        _screenNumber = 0;
+        _modeNumber = 0;
       }
     }
-    Serial.print("btn holded during ");
-    Serial.println(_timeButtonHolded * 100);// delay for this method
-    if (_timeButtonHolded >= 100) {
-      resetEspAndArduino();
-    }
+    Serial.println("mode btn holded during ");
+
   }
-  if (digitalRead(SwitchDisplayButtonPin) == HIGH && _isSwichDisplayButtonPressed) {
-    _isSwichDisplayButtonPressed = false;
-    _timeButtonHolded = 0;
+  if (digitalRead(SwitchModeButtonPin) == HIGH && _isSwichModeButtonPressed) {
+    _isSwichModeButtonPressed = false;
   }
 }
 
